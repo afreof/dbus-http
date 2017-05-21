@@ -95,7 +95,7 @@ static int handle_http_event(sd_event_source *event, int fd, uint32_t revents, v
         return 1;
 }
 
-int http_server_new(HttpServer **serverp, int port, sd_event *loop,
+int http_server_new(HttpServer **serverp, uint16_t port, sd_event *loop,
                     HttpGetHandler get_handler, HttpPostHandler post_handler, void *userdata) {
         _cleanup_(http_server_freep) HttpServer *server = NULL;
         int flags;

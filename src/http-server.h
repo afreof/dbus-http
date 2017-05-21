@@ -10,7 +10,7 @@ typedef struct HttpResponse HttpResponse;
 typedef void (*HttpGetHandler)(const char *path, HttpResponse *response, void *userdata);
 typedef void (*HttpPostHandler)(const char *path, void *data, size_t len, HttpResponse *response, void *userdata);
 
-int http_server_new(HttpServer **serverp, int port, sd_event *loop,
+int http_server_new(HttpServer **serverp, uint16_t port, sd_event *loop,
                     HttpGetHandler get_handler, HttpPostHandler post_handler, void *userdata);
 HttpServer * http_server_free(HttpServer *server);
 void http_server_freep(HttpServer **serverp);
