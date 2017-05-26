@@ -1,5 +1,6 @@
 
 #include "http-server.h"
+#include "log.h"
 
 #include <errno.h>
 #include <microhttpd.h>
@@ -46,6 +47,8 @@ static void request_completed(void *cls, struct MHD_Connection *connection,
 
         free(request->body);
         free(request);
+
+        log_debug("Completed connection request 0x%p",(void*)request);
 }
 
 static int handle_request(void *cls, struct MHD_Connection *connection,
@@ -59,12 +62,17 @@ static int handle_request(void *cls, struct MHD_Connection *connection,
         if (request == NULL) {
                 request = calloc(1, sizeof(HttpRequest));
                 *connection_cls = request;
+                log_debug("Created new connection request 0x%p",(void*)request);
                 return MHD_YES;
         }
 
         if (*upload_data_size) {
-                if (!request->f)
+                if (!request->f) {
+                        log_debug("upload start (%d bytes)", *upload_data_size);
                         request->f = open_memstream(&request->body, &request->size);
+                } else {
+                        log_debug("upload continue (%d bytes)", *upload_data_size);
+                }
                 fwrite(upload_data, 1, *upload_data_size, request->f);
                 *upload_data_size = 0;
                 return MHD_YES;
@@ -75,17 +83,22 @@ static int handle_request(void *cls, struct MHD_Connection *connection,
                 request->f = NULL;
         }
 
+        log_debug("Suspending connection 0x%p", (void*)connection);
         MHD_suspend_connection(connection);
 
         response = calloc(1, sizeof(HttpResponse));
         response->connection = connection;
 
-        if (strcmp(method, "GET") == 0 && server->get_handler)
+        if (strcmp(method, "GET") == 0 && server->get_handler) {
+                log_debug("Calling GET handler");
                 server->get_handler(url, response, server->userdata);
-        else if (strcmp(method, "POST") == 0 && server->post_handler)
+        } else if (strcmp(method, "POST") == 0 && server->post_handler) {
+                log_debug("Calling POST handler");
                 server->post_handler(url, request->body, request->size, response, server->userdata);
-        else
+        } else {
+                log_err("Handling of %s is not implemented.", method);
                 http_response_end(response, 405);
+        }
 
         return MHD_YES;
 }
@@ -93,6 +106,10 @@ static int handle_request(void *cls, struct MHD_Connection *connection,
 static int handle_http_event(sd_event_source *event, int fd, uint32_t revents, void *userdata) {
         MHD_run(userdata);
         return 1;
+}
+
+static void http_server_log(void * arg, const char * fmt, va_list ap) {
+        log_debug(fmt, ap);
 }
 
 int http_server_new(HttpServer **serverp, uint16_t port, sd_event *loop,
@@ -112,9 +129,13 @@ int http_server_new(HttpServer **serverp, uint16_t port, sd_event *loop,
                 MHD_USE_PEDANTIC_CHECKS |
                 MHD_USE_EPOLL_INTERNAL_THREAD |
                 MHD_USE_PIPE_FOR_SHUTDOWN;
+        if(log_get_level() >= LOG_DEBUG ) {
+                flags |= MHD_USE_DEBUG;
+        }
 
         server->daemon = MHD_start_daemon(flags, port, NULL, NULL, handle_request, server,
                                           MHD_OPTION_NOTIFY_COMPLETED, request_completed, NULL,
+                                          MHD_OPTION_EXTERNAL_LOGGER, http_server_log, NULL,
                                           MHD_OPTION_END);
         if (server->daemon == NULL)
                 return -EOPNOTSUPP;
@@ -166,6 +187,7 @@ void http_response_end(HttpResponse *response, int status) {
                 free(response->content_type);
         }
 
+        log_debug("Enqueueing response and resuming connection 0x%p", (void*)(&(response->connection)));
         MHD_queue_response(response->connection, status, mhd_response);
         MHD_resume_connection(response->connection);
         info = MHD_get_connection_info(response->connection, MHD_CONNECTION_INFO_DAEMON);

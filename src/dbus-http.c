@@ -12,6 +12,7 @@
 #include "dbus.h"
 #include "json.h"
 #include "http-server.h"
+#include "log.h"
 
 #define _cleanup_(fn) __attribute__((__cleanup__(fn)))
 
@@ -85,6 +86,7 @@ static void http_response_end_dbus_error(HttpResponse *response, const sd_bus_er
         else
                 status = 500;
 
+        log_err("dbus error: %s", error->name);
         http_response_end_error(response, status, error->name, error->message);
 }
 
@@ -140,10 +142,14 @@ static int bus_message_element_to_json(sd_bus_message *message, JsonValue **json
         int r;
 
         r = sd_bus_message_peek_type(message, &type, &contents);
-        if (r < 0)
+        if (r < 0) {
+                log_err("sd_bus_message_peek_type internal error");
                 return r;
-        if (r == 0)
+        }
+        if (r == 0){
+                log_err("sd_bus_message_peek_type unknown dbus type");
                 return 0;
+        }
 
         switch (type) {
                 case SD_BUS_TYPE_BOOLEAN: {
@@ -453,6 +459,7 @@ static int method_call_finished(sd_bus_message *message, void *userdata, sd_bus_
         _cleanup_(json_value_freep) JsonValue *reply = NULL;
         int r;
 
+        log_info("get properties from dbus");
         error = sd_bus_message_get_error(message);
         if (error) {
                 http_response_end_dbus_error(response, error);
@@ -461,6 +468,7 @@ static int method_call_finished(sd_bus_message *message, void *userdata, sd_bus_
 
         r = bus_message_to_json(message, &reply, request->method);
         if (r < 0) {
+                log_err("bus_message_to_json failed");
                 http_response_end(response, 500);
                 return 0;
         }
@@ -480,6 +488,8 @@ static int introspect_finished(sd_bus_message *message, void *userdata, sd_bus_e
         JsonValue *args;
         int r;
 
+        log_debug("dbus introspection");
+
         error = sd_bus_message_get_error(message);
         if (error) {
                 http_response_end_dbus_error(response, error);
@@ -488,12 +498,14 @@ static int introspect_finished(sd_bus_message *message, void *userdata, sd_bus_e
 
         r = sd_bus_message_read(message, "s", &xml);
         if (r < 0) {
+                log_err("dbus read failed");
                 http_response_end(response, 500);
                 return 0;
         }
 
         r = dbus_node_new_from_xml(&request->node, xml);
         if (r < 0) {
+                log_err("dbus_node_new_from_xml failed");
                 http_response_end(response, 500);
                 return 0;
         }
@@ -501,12 +513,14 @@ static int introspect_finished(sd_bus_message *message, void *userdata, sd_bus_e
         if (!json_object_lookup_string(request->json, "interface", &interface) ||
             !json_object_lookup_string(request->json, "method", &method_name) ||
             !json_object_lookup(request->json, "arguments", &args, JSON_TYPE_ARRAY)) {
+                log_err("Request requires parameter: interface, method, arguments[]!");
                 http_response_end_error(response, 400, "Invalid request", NULL);
                 return 0;
         }
 
         request->method = dbus_node_find_method(request->node, interface, method_name);
         if (!request->method) {
+                log_err("Invalid bdus method: %s", method_name);
                 http_response_end_error(response, 400, "No such method", NULL);
                 return 0;
         }
@@ -514,19 +528,23 @@ static int introspect_finished(sd_bus_message *message, void *userdata, sd_bus_e
         r = sd_bus_message_new_method_call(sd_bus_message_get_bus(message),
                                            &method_message, request->destination, request->object, interface, method_name);
         if (r < 0) {
+                log_err("sd_bus_message_new_method_call failed.");
                 http_response_end(response, 500);
                 return 0;
         }
 
         r = bus_message_append_args_from_json(method_message, request->method, args);
         if (r == -EINVAL) {
+                log_err("dbus request with invalid parameters");
                 http_response_end_error(response, 400, "Invalid request", NULL);
                 return 0;
         } else if (r < 0) {
+                log_err("dbus request unknown error");
                 http_response_end(response, 500);
                 return 0;
         }
 
+        log_debug("dbus call to %s %s %s", request->destination, request->object, request->method->name);
         r = sd_bus_call_async(sd_bus_message_get_bus(message), NULL, method_message, method_call_finished, response, 0);
 
         return 0;
@@ -563,6 +581,8 @@ static void handle_get(const char *path, HttpResponse *response, void *userdata)
         _cleanup_(freep) char *name = NULL;
         _cleanup_(freep) char *object = NULL;
         int r;
+        const char prop_interface[] = "org.freedesktop.DBus.Properties";
+        const char prop_func[] = "GetAll";
 
         r = parse_url(path, &name, &object);
         if (r < 0) {
@@ -570,12 +590,15 @@ static void handle_get(const char *path, HttpResponse *response, void *userdata)
                 return;
         }
 
-        r = sd_bus_call_method_async(bus, NULL, name, object, "org.freedesktop.DBus.Properties", "GetAll",
+        r = sd_bus_call_method_async(bus, NULL, name, object, prop_interface, prop_func,
                                      get_properties_finished, response, "s", "");
-        if (r == -EINVAL)
+        if (r == -EINVAL) {
+                log_err("Returned EINVAL: call %s %s %s %s", name, object, prop_interface, prop_func);
                 http_response_end(response, 400);
-        else if (r < 0)
+        } else if (r < 0) {
+                log_err("Error in call %s %s %s %s", name, object, prop_interface, prop_func);
                 http_response_end(response, 500);
+        }
 }
 
 static void handle_post(const char *path, void *body, size_t len, HttpResponse *response, void *userdata) {
@@ -621,7 +644,7 @@ static int parse_args (int argc, char **argv, CmdArgs *cmd_args) {
         cmd_args->session_bus = false;
         cmd_args->http_port = 8080;
 
-        while ((short_arg = getopt (argc, argv, "sp:h")) != -1) {
+        while ((short_arg = getopt (argc, argv, "sp:v:h")) != -1) {
                 switch (short_arg)
                 {
                 case 's':
@@ -640,10 +663,21 @@ static int parse_args (int argc, char **argv, CmdArgs *cmd_args) {
                         }
                         break;
                 }
+                case 'v':
+                        if(log_set_level_str(optarg) < 0) {
+                                printf("log level must be in range: ");
+                                log_print_levels();
+                                puts("");
+                                return -1;
+                        }
+                        break;
                 case '?':
                 case 'h':
                         puts("-s run on session DBUS");
                         puts("-p 0..32767 HTTP port (default 80)");
+                        printf("-v [");
+                        log_print_levels();
+                        puts("]");
                         break;
                 // Invalid arguments
                 default:
@@ -682,7 +716,7 @@ int main(int argc, char **argv) {
         if (r < 0)
                 goto finish;
 
-        printf("dbus-http starting on %s dbus, port %u\n", bus_name, cmd_args.http_port);
+        log_notice("dbus-http starting on %s dbus, port %u", bus_name, cmd_args.http_port);
 
         r = sd_bus_attach_event(bus, loop, 0);
         if (r < 0)
@@ -698,7 +732,7 @@ int main(int argc, char **argv) {
 
 finish:
         if (r < 0)
-                fprintf(stderr, "Failure: %s\n", strerror(-r));
+                log_emerg("Failure: %s\n", strerror(-r));
 
         return r < 0 ? EXIT_FAILURE : EXIT_SUCCESS;
 }

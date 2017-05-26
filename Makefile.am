@@ -48,7 +48,9 @@ dbus_http_SOURCES = \
 	src/json.h \
 	src/json.c \
 	src/dbus.h \
-	src/dbus.c
+	src/dbus.c\
+	src/log.c \
+	src/log.h
 
 dbus_http_CFLAGS = \
 	$(AM_CFLAGS) \
