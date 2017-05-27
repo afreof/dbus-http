@@ -54,6 +54,8 @@ bin_PROGRAMS += \
 	dbus-http
 
 dbus_http_SOURCES = \
+	src/main.c \
+	src/dbus-http.h \
 	src/dbus-http.c \
 	src/http-server.h \
 	src/http-server.c \
@@ -62,7 +64,9 @@ dbus_http_SOURCES = \
 	src/dbus.h \
 	src/dbus.c\
 	src/log.c \
-	src/log.h
+	src/log.h \
+	environment.h \
+	systemd-compat.h
 
 dbus_http_CFLAGS = \
 	$(AM_CFLAGS) \
