@@ -1,6 +1,7 @@
 
 #include "http-server.h"
 #include "log.h"
+#include "environment.h"
 
 #include <errno.h>
 #include <microhttpd.h>
@@ -11,6 +12,20 @@
 #include <sys/stat.h>
 
 
+static const char CONTENT_TYPE_HTML[] = "text/html; charset=utf-8";
+static const char CONTENT_TYPE_CSS[] = "text/css; charset=utf-8";
+static const char CONTENT_TYPE_JS[] = "application/javascript";
+static const char CONTENT_TYPE_MAP[] = "application/octet-stream";
+static const char CONTENT_TYPE_ICO[] = "image/x-icon";
+static const char CONTENT_TYPE_PNG[] = "image/png";
+static const char CONTENT_TYPE_JPG[] = "image/jpg";
+static const char CONTENT_TYPE_GIF[] = "image/gif";
+static const char CONTENT_TYPE_SVG[] = "image/svg+xml";
+static const char CONTENT_TYPE_TTF[] = "application/x-font-ttf";
+static const char CONTENT_TYPE_WOFF2[] = "font/woff2";
+static const char CONTENT_TYPE_JSON[] = "application/json";
+
+
 #define _cleanup_(fn) __attribute__((__cleanup__(fn)))
 
 typedef struct HttpRequest HttpRequest;
@@ -18,9 +33,10 @@ typedef struct HttpRequest HttpRequest;
 struct HttpServer {
         struct MHD_Daemon *daemon;
         sd_event_source *http_event;
-        HttpGetHandler get_handler;
-        HttpPostHandler post_handler;
+        HttpGetHandler **get_handlers;
+        HttpPostHandler **post_handlers;
         void *userdata;
+        const char *www_dir;
 };
 
 struct HttpRequest {
@@ -42,9 +58,143 @@ struct HttpResponse {
         void (*free_func)(void *);
 };
 
+
+static const char *get_extension(const char *path) {
+        const char *dot = strrchr(path, '.');
+        if (!dot) {
+                return dot;
+        } else {
+                return dot + 1;
+        }
+}
+
+static ssize_t file_reader_callback (void *cls, uint64_t pos, char *buf, size_t max) {
+        FILE *file = cls;
+
+        (void)  fseek (file, pos, SEEK_SET);
+        return fread (buf, 1, max, file);
+}
+
+static void file_free_callback (void *cls) {
+        FILE *file = cls;
+        fclose (file);
+}
+
+static void free_full_path(char** full_path) {
+        if(*full_path)
+                free(*full_path);
+}
+
+static HttpServerHandlerStatus handle_get_file(void *cls, const char *url, HttpResponse *response) {
+        HttpServer *server = cls;
+        _cleanup_(free_full_path) char *full_path = NULL;
+        struct stat path_stat;
+        FILE *file;
+        const char *content_type = NULL;
+
+        log_info("handle_get_file for URL: %s", url);
+        log_debug("Resuming connection");
+
+        // prepend www folder
+        full_path = malloc(strlen(server->www_dir) + strlen(url) + 12); // leave enough space to append "/index.html" if necessary.
+
+        strcpy(full_path, server->www_dir);
+        strcat(full_path, url);
+
+        if (access(full_path, R_OK) == -1) {
+                http_response_end(response, 404);
+                return HTTP_SERVER_HANDLED_ERROR;
+        }
+
+        lstat(full_path, &path_stat);
+        if (S_ISDIR(path_stat.st_mode)) {
+                strcat(full_path, "/index.html");
+        }
+
+        lstat(full_path, &path_stat);
+        if (S_ISREG(path_stat.st_mode)) {
+                const char *extension = get_extension(full_path);
+
+                if (strcmp(extension, "html") == 0) {
+                        content_type = CONTENT_TYPE_HTML;
+                } else if (strcmp(extension, "css") == 0) {
+                        content_type = CONTENT_TYPE_CSS;
+                } else if (strcmp(extension, "js") == 0) {
+                        content_type = CONTENT_TYPE_JS;
+                } else if (strcmp(extension, "json") == 0) {
+                        content_type = CONTENT_TYPE_JSON;
+                } else if (strcmp(extension, "map") == 0) {
+                        content_type = CONTENT_TYPE_MAP;
+                } else if (strcmp(extension, "ico") == 0) {
+                        content_type = CONTENT_TYPE_ICO;
+                } else if (strcmp(extension, "png") == 0) {
+                        content_type = CONTENT_TYPE_PNG;
+                } else if (strcmp(extension, "jpg") == 0) {
+                        content_type = CONTENT_TYPE_JPG;
+                } else if (strcmp(extension, "gif") == 0) {
+                        content_type = CONTENT_TYPE_GIF;
+                } else if (strcmp(extension, "svg") == 0) {
+                        content_type = CONTENT_TYPE_SVG;
+                } else if (strcmp(extension, "ttf") == 0) {
+                        content_type = CONTENT_TYPE_TTF;
+                } else if (strcmp(extension, "woff2") == 0) {
+                        content_type = CONTENT_TYPE_WOFF2;
+                } else {
+                        // content type not recognized else
+                        log_warning("Content type is unknown");
+                        http_response_end(response, MHD_HTTP_NOT_FOUND);
+                        return HTTP_SERVER_HANDLED_ERROR;
+                }
+        }
+
+        file = fopen (full_path, "rb");
+        if (file == NULL) {
+                // content type not recognized
+                http_response_end(response, MHD_HTTP_INTERNAL_SERVER_ERROR);
+                return HTTP_SERVER_HANDLED_ERROR;
+        } else {
+                struct MHD_Response *mhd_response;
+                const union MHD_ConnectionInfo *info;
+                int ret;
+
+                if (response->f)
+                               fclose(response->f);
+
+                mhd_response = MHD_create_response_from_callback (path_stat.st_size, 32 * 1024,     /* 32k page size */
+                                &file_reader_callback, file, &file_free_callback);
+                if (mhd_response == NULL) {
+                        fclose (file);
+                        log_err("Error in handle_get_file while handling path: %s (file found).", full_path);
+                        return HTTP_SERVER_HANDLED_ERROR;
+                }
+
+                if(content_type) {
+                        MHD_add_response_header(mhd_response, "Content-Type", content_type);
+                }
+
+                ret = MHD_queue_response (response->connection, MHD_HTTP_OK, mhd_response);
+                if(ret != MHD_YES)
+                        log_err("Enqueueing failed!");
+                log_debug("file served for URL: %s, path: %s", url, full_path);
+
+                MHD_resume_connection(response->connection);
+                info = MHD_get_connection_info(response->connection, MHD_CONNECTION_INFO_DAEMON);
+                MHD_run(info->daemon);
+
+                MHD_destroy_response (mhd_response);
+                if (response->free_func)
+                        response->free_func(response->user_data);
+                free(response);
+
+                return HTTP_SERVER_HANDLED_SUCCESS;
+        }
+}
+
 static void request_completed(void *cls, struct MHD_Connection *connection,
                               void **connection_cls, enum MHD_RequestTerminationCode toe) {
         HttpRequest *request = *connection_cls;
+
+        log_debug("request_completed");
 
         if (request->f)
                 fclose(request->f);
@@ -62,6 +212,7 @@ static int handle_request(void *cls, struct MHD_Connection *connection,
         HttpServer *server = cls;
         HttpRequest *request = *connection_cls;
         HttpResponse *response;
+        HttpServerHandlerStatus handler_r = HTTP_SERVER_HANDLED_IGNORED;
 
         if (request == NULL) {
                 request = calloc(1, sizeof(HttpRequest));
@@ -93,13 +244,27 @@ static int handle_request(void *cls, struct MHD_Connection *connection,
         response = calloc(1, sizeof(HttpResponse));
         response->connection = connection;
 
-        if (strcmp(method, "GET") == 0 && server->get_handler) {
-                log_debug("Calling GET handler");
-                server->get_handler(url, response, server->userdata);
-        } else if (strcmp(method, "POST") == 0 && server->post_handler) {
-                log_debug("Calling POST handler");
-                server->post_handler(url, request->body, request->size, response, server->userdata);
-        } else {
+        if (strcmp(method, "GET") == 0) {
+                for(HttpGetHandler **handler_ptr = server->get_handlers; *handler_ptr != NULL; handler_ptr++) {
+                        handler_r = (*handler_ptr)(url, response, server->userdata);
+                        if(handler_r != HTTP_SERVER_HANDLED_IGNORED) {
+                                break;
+                        }
+                }
+                // If no get handler is responsible, the file handler is called.
+                if(handler_r == HTTP_SERVER_HANDLED_IGNORED) {
+                        log_debug("Calling the file handler for GET request to %s.", url);
+                        handler_r = handle_get_file(cls, url, response);
+                }
+        } else if (strcmp(method, "POST") == 0) {
+                for(HttpPostHandler **handler_ptr = server->post_handlers; *handler_ptr != NULL; handler_ptr++) {
+                        handler_r = (*handler_ptr)(url, request->body, request->size, response, server->userdata);
+                        if(handler_r != HTTP_SERVER_HANDLED_IGNORED) {
+                                break;
+                        }
+                }
+        }
+        if(handler_r == HTTP_SERVER_HANDLED_IGNORED) {
                 log_err("Handling of %s is not implemented.", method);
                 http_response_end(response, 405);
         }
@@ -108,6 +273,7 @@ static int handle_request(void *cls, struct MHD_Connection *connection,
 }
 
 static int handle_http_event(sd_event_source *event, int fd, uint32_t revents, void *userdata) {
+        //log_debug("MHD_run, handle_http_event");
         MHD_run(userdata);
         return 1;
 }
@@ -122,16 +288,18 @@ static bool ipv6_test(void) {
 }
 
 int http_server_new(HttpServer **serverp, uint16_t port, sd_event *loop,
-                    HttpGetHandler get_handler, HttpPostHandler post_handler, void *userdata) {
+                    HttpGetHandler **get_handlers, HttpPostHandler **post_handlers,
+                    void *userdata, const char *www_dir) {
         _cleanup_(http_server_freep) HttpServer *server = NULL;
         int flags;
         const union MHD_DaemonInfo *info;
         int r;
 
         server = calloc(1, sizeof(HttpServer));
-        server->get_handler = get_handler;
-        server->post_handler = post_handler;
+        server->get_handlers = get_handlers;
+        server->post_handlers = post_handlers;
         server->userdata = userdata;
+        server->www_dir = www_dir;
 
         flags = MHD_USE_SUSPEND_RESUME |
                 MHD_USE_PEDANTIC_CHECKS |
@@ -148,6 +316,7 @@ int http_server_new(HttpServer **serverp, uint16_t port, sd_event *loop,
                                           MHD_OPTION_NOTIFY_COMPLETED, request_completed, NULL,
                                           MHD_OPTION_EXTERNAL_LOGGER, http_server_log, NULL,
                                           MHD_OPTION_END);
+
         if (server->daemon == NULL)
                 return -EOPNOTSUPP;
 
@@ -187,6 +356,7 @@ void http_server_freep(HttpServer **serverp) {
 void http_response_end(HttpResponse *response, int status) {
         struct MHD_Response *mhd_response;
         const union MHD_ConnectionInfo *info;
+        int ret;
 
         if (response->f)
                 fclose(response->f);
@@ -199,9 +369,12 @@ void http_response_end(HttpResponse *response, int status) {
         }
 
         log_debug("Enqueueing response and resuming connection 0x%p", (void*)(&(response->connection)));
-        MHD_queue_response(response->connection, status, mhd_response);
+        ret = MHD_queue_response(response->connection, status, mhd_response);
+        if(ret != MHD_YES)
+                log_err("Enqueueing failed!");
         MHD_resume_connection(response->connection);
         info = MHD_get_connection_info(response->connection, MHD_CONNECTION_INFO_DAEMON);
+        //log_debug("MHD_run, http_response_end");
         MHD_run(info->daemon);
 
         MHD_destroy_response(mhd_response);

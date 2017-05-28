@@ -7,11 +7,16 @@
 typedef struct HttpServer HttpServer;
 typedef struct HttpResponse HttpResponse;
 
-typedef void (*HttpGetHandler)(const char *path, HttpResponse *response, void *userdata);
-typedef void (*HttpPostHandler)(const char *path, void *data, size_t len, HttpResponse *response, void *userdata);
+
+// return value for http handlers. The server calls available handlers until one handler does not return ignored state.
+typedef enum{ HTTP_SERVER_HANDLED_SUCCESS, HTTP_SERVER_HANDLED_IGNORED, HTTP_SERVER_HANDLED_ERROR} HttpServerHandlerStatus;
+
+typedef HttpServerHandlerStatus HttpGetHandler(const char *path, HttpResponse *response, void *userdata);
+typedef HttpServerHandlerStatus HttpPostHandler(const char *path, void *data, size_t len, HttpResponse *response, void *userdata);
 
 int http_server_new(HttpServer **serverp, uint16_t port, sd_event *loop,
-                    HttpGetHandler get_handler, HttpPostHandler post_handler, void *userdata);
+                    HttpGetHandler **get_handlers, HttpPostHandler **post_handlers,
+                    void *userdata, const char *www_dir);
 HttpServer * http_server_free(HttpServer *server);
 void http_server_freep(HttpServer **serverp);
 

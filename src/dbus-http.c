@@ -931,7 +931,7 @@ static int parse_url(const char *url, char **namep, char **objectp) {
         return 0;
 }
 
-void handle_get_dbus(const char *path, HttpResponse *response, void *userdata) {
+HttpServerHandlerStatus handle_get_dbus(const char *path, HttpResponse *response, void *userdata) {
         Environment *env = userdata;
 
         if (strncmp(env->dbus_prefix, path, strlen(env->dbus_prefix)) == 0) {  // starts with dbus_prefix
@@ -946,25 +946,29 @@ void handle_get_dbus(const char *path, HttpResponse *response, void *userdata) {
                 r = parse_url(dbus_path, &name, &object);
                 if (r < 0) {
                         http_response_end(response, 400);
-                        return;
+                        return HTTP_SERVER_HANDLED_ERROR;
                 }
 
                 r = sd_bus_call_method_async(bus, NULL, name, object, prop_interface, prop_func,
-                                                                         get_properties_finished, response, "s", "");
+                                get_properties_finished, response, "s", "");
                 if (r == -EINVAL) {
-                        log_err("Returned EINVAL: call %s %s %s %s", name, object, prop_interface, prop_func);
+                        log_err("handle_get_dbus got EINVAL from dbus call %s %s %s %s", name, object, prop_interface, prop_func);
                         http_response_end(response, 400);
+                        return HTTP_SERVER_HANDLED_ERROR;
                 }
                 else if (r < 0) {
-                        log_err("Error in call %s %s %s %s", name, object, prop_interface, prop_func);
+                        log_err("handle_get_dbus error in call %s %s %s %s", name, object, prop_interface, prop_func);
                         http_response_end(response, 500);
+                        return HTTP_SERVER_HANDLED_ERROR;
                 }
-        } else {
-                http_response_end(response, 400);
+                log_info("handle_get_dbus handled URL %s", path);
+                return HTTP_SERVER_HANDLED_SUCCESS;
         }
+        log_debug("handle_get_dbus ignored URL %s", path);
+        return HTTP_SERVER_HANDLED_IGNORED;
 }
 
-void handle_post_dbus(const char *path, void *body, size_t len, HttpResponse *response, void *userdata) {
+HttpServerHandlerStatus handle_post_dbus(const char *path, void *body, size_t len, HttpResponse *response, void *userdata) {
         Environment *env = userdata;
 
         if (strncmp(env->dbus_prefix, path, strlen(env->dbus_prefix)) == 0) {  // starts with dbus_prefix
@@ -974,8 +978,9 @@ void handle_post_dbus(const char *path, void *body, size_t len, HttpResponse *re
                 int r;
 
                 if (!body) {
+                        log_err("POST to URL %s without body", path);
                         http_response_end(response, 400);
-                        return;
+                        return HTTP_SERVER_HANDLED_ERROR;
                 }
 
                 request = calloc(1, sizeof(MethodCallRequest));
@@ -983,23 +988,28 @@ void handle_post_dbus(const char *path, void *body, size_t len, HttpResponse *re
 
                 r = parse_url(dbus_path, &request->destination, &request->object);
                 if (r < 0) {
+                        log_err("POST to with invalid dbus URL %s", path);
                         http_response_end(response, 400);
-                        return;
+                        return HTTP_SERVER_HANDLED_ERROR;
                 }
 
                 r = json_parse(body, &request->json, JSON_TYPE_OBJECT);
                 if (r < 0) {
+                        log_err("POST to %s with invalid JSON", path);
                         http_response_end(response, 400);
-                        return;
+                        return HTTP_SERVER_HANDLED_ERROR;
                 }
 
                 r = sd_bus_call_method_async(bus, NULL, request->destination, request->object,
                                 "org.freedesktop.DBus.Introspectable", "Introspect", introspect_finished, response, NULL);
                 if (r < 0) {
+                        log_err("handle_post_dbus introspection error for %s %s", request->destination, request->object);
                         http_response_end(response, 400);
-                        return;
+                        return HTTP_SERVER_HANDLED_ERROR;
                 }
-        } else {
-                http_response_end(response, 404);
+                log_info("handle_post_dbus handled URL %s", path);
+                return HTTP_SERVER_HANDLED_SUCCESS;
         }
+        log_debug("handle_post_dbus ignored URL %s", path);
+        return HTTP_SERVER_HANDLED_IGNORED;
 }
