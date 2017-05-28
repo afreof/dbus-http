@@ -110,7 +110,7 @@ int http_server_new(HttpServer **serverp, int port, sd_event *loop,
         flags = MHD_USE_DUAL_STACK |
                 MHD_USE_SUSPEND_RESUME |
                 MHD_USE_PEDANTIC_CHECKS |
-                MHD_USE_EPOLL_LINUX_ONLY |
+                MHD_USE_EPOLL_INTERNAL_THREAD |
                 MHD_USE_PIPE_FOR_SHUTDOWN;
 
         server->daemon = MHD_start_daemon(flags, port, NULL, NULL, handle_request, server,
