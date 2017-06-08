@@ -25,10 +25,13 @@ static const char CONTENT_TYPE_TTF[] = "application/x-font-ttf";
 static const char CONTENT_TYPE_WOFF2[] = "font/woff2";
 static const char CONTENT_TYPE_JSON[] = "application/json";
 
+#define POSTBUFFERSIZE  512
 
 #define _cleanup_(fn) __attribute__((__cleanup__(fn)))
 
 typedef struct HttpRequest HttpRequest;
+
+typedef enum { UNDEFINED, GET, POST, POST_FILE } ConnectionType;
 
 struct HttpServer {
         struct MHD_Daemon *daemon;
@@ -40,9 +43,14 @@ struct HttpServer {
 };
 
 struct HttpRequest {
-        FILE *f;
+        FILE *f;  // memstream buffer or file written to disk
+        // memstream buffer
         char *body;
         size_t size;
+        // or post processor
+        struct MHD_PostProcessor *postprocessor;
+        // shortcut for strcmp(method)
+        ConnectionType conn_type;
 };
 
 struct HttpResponse {
@@ -190,6 +198,35 @@ static HttpServerHandlerStatus handle_get_file(void *cls, const char *url, HttpR
         }
 }
 
+
+static int iterate_post (void *cls, enum MHD_ValueKind kind, const char *key,
+                const char *filename, const char *content_type, const char *transfer_encoding,
+                const char *data, uint64_t off, size_t size) {
+        HttpRequest *request = cls;
+        _cleanup_(free_full_path) char *full_path = NULL;
+
+        if (! request->f) {
+                if(asprintf(&full_path, "/tmp/%s", filename) < 0) {
+                        log_crit("Concatenation of filename failed");
+                        return MHD_NO;
+                }
+                request->f = fopen (full_path, "w+");
+                if (!request->f) {
+                        log_crit("Opening file %s failed", full_path);
+                        return MHD_NO;
+                }
+        }
+
+        if (size > 0) {
+                if (! fwrite (data, sizeof (char), size, request->f)) {
+                        log_crit("Writing to file %s failed", full_path);
+                        return MHD_NO;
+                }
+        }
+        return MHD_YES;
+}
+
+
 static void request_completed(void *cls, struct MHD_Connection *connection,
                               void **connection_cls, enum MHD_RequestTerminationCode toe) {
         HttpRequest *request = *connection_cls;
@@ -198,6 +235,9 @@ static void request_completed(void *cls, struct MHD_Connection *connection,
 
         if (request->f)
                 fclose(request->f);
+
+        if (request->postprocessor)
+                MHD_destroy_post_processor (request->postprocessor);
 
         free(request->body);
         free(request);
@@ -213,22 +253,55 @@ static int handle_request(void *cls, struct MHD_Connection *connection,
         HttpRequest *request = *connection_cls;
         HttpResponse *response;
         HttpServerHandlerStatus handler_r = HTTP_SERVER_HANDLED_IGNORED;
+        const char filepost_url[] = "/filepost";
 
+        // new connection
         if (request == NULL) {
                 request = calloc(1, sizeof(HttpRequest));
                 *connection_cls = request;
+
+                if (strcasecmp(method, MHD_HTTP_METHOD_GET) == 0){
+                        request->conn_type = GET;
+                } else if (strcasecmp(method, MHD_HTTP_METHOD_POST) == 0){
+                        if(strncmp(filepost_url, url, strlen(filepost_url)) == 0){
+                                request->conn_type = POST_FILE;
+                        } else {
+                                request->conn_type = POST;
+                        }
+                } else {
+                        request->conn_type = UNDEFINED;
+                }
+
+                /* Support file upload to /tmp folder (multipart/form-data , application/x-www-form-urlencoded) */
+                if ( request->conn_type == POST_FILE) {
+                        request->postprocessor = MHD_create_post_processor(connection, POSTBUFFERSIZE, iterate_post, (void *) request);
+                        if (request->postprocessor == NULL) {
+                                log_crit("Cannot allocate post processor");
+                                return MHD_YES;
+                        }
+                }
+
                 log_debug("Created new connection request 0x%p",(void*)request);
                 return MHD_YES;
         }
 
         if (*upload_data_size) {
-                if (!request->f) {
-                        log_debug("upload start (%d bytes)", *upload_data_size);
-                        request->f = open_memstream(&request->body, &request->size);
+                // If there is a postprocessor run the file upload
+                if(request->postprocessor != NULL) {
+                        if (MHD_post_process (request->postprocessor, upload_data, *upload_data_size) != MHD_YES) {
+                                log_crit("failure while post processing data.");
+                                return MHD_YES;
+                        }
+                // otherwise store the post data into a memstream object to be used for a dbus call
                 } else {
-                        log_debug("upload continue (%d bytes)", *upload_data_size);
+                        if (!request->f) {
+                                log_debug("upload start (%d bytes)", *upload_data_size);
+                                request->f = open_memstream(&request->body, &request->size);
+                        } else {
+                                log_debug("upload continue (%d bytes)", *upload_data_size);
+                        }
+                        fwrite(upload_data, 1, *upload_data_size, request->f);
                 }
-                fwrite(upload_data, 1, *upload_data_size, request->f);
                 *upload_data_size = 0;
                 return MHD_YES;
         }
@@ -244,7 +317,7 @@ static int handle_request(void *cls, struct MHD_Connection *connection,
         response = calloc(1, sizeof(HttpResponse));
         response->connection = connection;
 
-        if (strcmp(method, "GET") == 0) {
+        if (request->conn_type == GET) {
                 for(HttpGetHandler **handler_ptr = server->get_handlers; *handler_ptr != NULL; handler_ptr++) {
                         handler_r = (*handler_ptr)(url, response, server->userdata);
                         if(handler_r != HTTP_SERVER_HANDLED_IGNORED) {
@@ -256,17 +329,21 @@ static int handle_request(void *cls, struct MHD_Connection *connection,
                         log_debug("Calling the file handler for GET request to %s.", url);
                         handler_r = handle_get_file(cls, url, response);
                 }
-        } else if (strcmp(method, "POST") == 0) {
+        } else if (request->conn_type == POST) {
                 for(HttpPostHandler **handler_ptr = server->post_handlers; *handler_ptr != NULL; handler_ptr++) {
                         handler_r = (*handler_ptr)(url, request->body, request->size, response, server->userdata);
                         if(handler_r != HTTP_SERVER_HANDLED_IGNORED) {
                                 break;
                         }
                 }
-        }
-        if(handler_r == HTTP_SERVER_HANDLED_IGNORED) {
+        } else if(request->conn_type == POST_FILE) {
+                FILE *f = http_response_get_stream(response, "application/json");
+                fputs("{\"result\":\"success\"}", f);
+                log_debug("Finalizing file upload");
+                http_response_end(response, MHD_HTTP_OK);
+        } else {
                 log_err("Handling of %s is not implemented.", method);
-                http_response_end(response, 405);
+                http_response_end(response, MHD_HTTP_NOT_ACCEPTABLE);
         }
 
         return MHD_YES;
