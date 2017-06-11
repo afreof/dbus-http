@@ -90,6 +90,7 @@ static void http_response_end_dbus_error(HttpResponse *response, const sd_bus_er
         http_response_end_error(response, status, error->name, error->message);
 }
 
+
 static int bus_message_dict_entry_to_json(sd_bus_message *message, char **keyp, JsonValue **valuep) {
         char type;
         const char *contents;
@@ -303,7 +304,10 @@ static int bus_message_element_to_json(sd_bus_message *message, JsonValue **json
                         break;
 
                 case SD_BUS_TYPE_UNIX_FD:
+                        log_err("UNIX FD is not supported");
                         return -ENOTSUP;
+                default:
+                        log_err("Data type %d is not supported.", type);
         }
 
         *jsonp = json;
@@ -347,6 +351,27 @@ static int bus_message_to_json(sd_bus_message *message, JsonValue **jsonp, DBusM
 
 static int bus_message_append_number(sd_bus_message *message, char type, double number) {
         switch (type) {
+                case SD_BUS_TYPE_BOOLEAN:
+                case SD_BUS_TYPE_BYTE: {
+                        uint8_t num = number;
+                        sd_bus_message_append_basic(message, type, &num);
+                        break;
+                }
+                case SD_BUS_TYPE_INT16: {
+                        int16_t num = number;
+                        sd_bus_message_append_basic(message, type, &num);
+                        break;
+                }
+                case SD_BUS_TYPE_UINT16: {
+                        uint16_t num = number;
+                        sd_bus_message_append_basic(message, type, &num);
+                        break;
+                }
+                case SD_BUS_TYPE_INT32: {
+                        int32_t num = number;
+                        sd_bus_message_append_basic(message, type, &num);
+                        break;
+                }
                 case SD_BUS_TYPE_UINT32: {
                         uint32_t num = number;
                         sd_bus_message_append_basic(message, type, &num);
@@ -358,7 +383,16 @@ static int bus_message_append_number(sd_bus_message *message, char type, double 
                         sd_bus_message_append_basic(message, type, &num);
                         break;
                 }
-
+                case SD_BUS_TYPE_UINT64: {
+                        uint64_t num = number;
+                        sd_bus_message_append_basic(message, type, &num);
+                        break;
+                }
+                case SD_BUS_TYPE_DOUBLE: {
+                        double num = number;
+                        sd_bus_message_append_basic(message, type, &num);
+                        break;
+                }
                 default:
                         return -EINVAL;
         }
@@ -366,19 +400,262 @@ static int bus_message_append_number(sd_bus_message *message, char type, double 
         return 0;
 }
 
-static int bus_message_append_from_json(sd_bus_message *message, JsonValue *json, const char *type) {
-        if (strchr("ynqiuxtd", *type) != NULL) {
+static int bus_message_append_from_json(sd_bus_message *message, JsonValue *json, const char *type, unsigned int* type_inc) {
+        if (bus_type_is_number(*type)) {
                 if (json_value_get_type(json) != JSON_TYPE_NUMBER)
                         return -EINVAL;
-
+                *type_inc = 1;
                 return bus_message_append_number(message, *type, json_value_get_number(json));
         }
 
         switch (*type) {
-                case SD_BUS_TYPE_ARRAY:
-                case SD_BUS_TYPE_STRUCT:
-                case SD_BUS_TYPE_DICT_ENTRY:
-                case SD_BUS_TYPE_VARIANT:
+                case SD_BUS_TYPE_ARRAY: {
+                        int r;
+                        JsonValue *j_a_element;
+                        size_t signature_len;
+                        unsigned int sub_type_inc = 0;
+
+                        // array
+                        if(json_value_get_type(json) != JSON_TYPE_ARRAY && json_value_get_type(json) != JSON_TYPE_OBJECT){
+                                log_err("DBUS interface expected array");
+                                return -EINVAL;
+                        }
+
+                        r = signature_element_length(type+1, &signature_len);
+                        if (r < 0) {
+                                log_err("Invalid array signature.");
+                                return r;
+                        }
+                        {
+                                size_t ja_len;
+                                char sub_signature[signature_len + 1];
+                                memcpy(sub_signature, type+1, signature_len);
+                                sub_signature[signature_len] = 0;
+
+
+                                r = sd_bus_message_open_container(message, SD_BUS_TYPE_ARRAY, sub_signature);
+                                if (r < 0){
+                                        log_err("Cannot create dbus array container");
+                                        return -EINVAL;
+                                }
+
+                                if(json_value_get_type(json) == JSON_TYPE_ARRAY){
+                                        ja_len = json_array_get_length(json);
+                                        log_debug("Parsing array of length %d, %s", ja_len, type);
+                                        for(size_t i=0; i<ja_len; i++) {
+                                                if(json_array_get(json, i, &j_a_element, 0) == false) {  // TODO: validate expected type: use type expected by dbus instead of 0
+                                                        log_err("Fetching value from array failed");
+                                                        return -EINVAL;
+                                                }
+
+                                                r = bus_message_append_from_json(message, j_a_element, sub_signature, &sub_type_inc);
+                                                if ( r < 0) {
+                                                        return r;
+                                                }
+                                        }
+                                }else{  // it's json object to dbus dict a{
+                                        log_debug("Parsing array as dict %s", type);
+                                        r = bus_message_append_from_json(message, json, sub_signature, &sub_type_inc);
+                                        if ( r < 0) {
+                                                return r;
+                                        }
+                                }
+                        }
+                        r = sd_bus_message_close_container(message);
+                        if (r < 0){
+                                log_err("Closing dbus container failed");
+                                return r;
+                        }
+                        *type_inc = 1 + signature_len;  // +a
+                        return 0;
+                }
+
+                case SD_BUS_TYPE_STRUCT_BEGIN: {
+                        size_t ja_len;
+                        int r;
+                        JsonValue *a_json;
+                        size_t signature_len;
+
+                        if(json_value_get_type(json) != JSON_TYPE_ARRAY){
+                                log_err("DBUS interface expected json array or object");
+                                return -EINVAL;
+                        }
+                        ja_len = json_array_get_length(json);
+
+                        // get length of e.g. (i(vy)i) --> 8
+                        r = signature_element_length(type, &signature_len);
+                        if (r < 0) {
+                                log_err("Invalid struct entry signature.");
+                                return r;
+                        }
+                        {
+                                // get the signature inside the brackets e.g. (i(vy)i) --> i(vy)i
+                                char sub_signature[signature_len-1];
+                                char* sub_signature_p = sub_signature;
+                                memcpy(sub_signature, type + 1, signature_len - 2);
+                                sub_signature[signature_len - 2] = 0;
+
+                                log_debug("Parsing struct of lenght %d, %s", ja_len, sub_signature);
+
+                                // TODO: Check if container must be opened and closed in the for loop
+                                r = sd_bus_message_open_container(message, SD_BUS_TYPE_STRUCT, sub_signature);
+                                if (r < 0){
+                                        log_err("Creating struct container failed.");
+                                        return -EINVAL;
+                                }
+
+                                for(size_t i=0; i<ja_len; i++) {
+                                        unsigned int sub_type_inc = 0;
+
+                                        if(json_array_get(json, i, &a_json, 0) == false) {
+                                                log_err("Fetching value from array failed");
+                                                return -EINVAL;
+                                        }
+
+                                        r = bus_message_append_from_json(message, a_json, sub_signature_p, &sub_type_inc);
+                                        if ( r < 0) {
+                                                log_err("Appending value to dbus struct failed");
+                                                return r;
+                                        }
+                                        sub_signature_p += sub_type_inc;
+                                }
+                        }
+                        *type_inc = signature_len;
+                        r = sd_bus_message_close_container(message);
+                        if (r < 0){
+                                log_err("Closing struct container failed.");
+                        }
+                        return r;
+                }
+
+                case SD_BUS_TYPE_DICT_ENTRY_BEGIN: {
+                        int r;
+                        size_t signature_len;
+
+                        if(json_value_get_type(json) != JSON_TYPE_OBJECT){
+                                log_err("DBUS interface expected json object -> dict");
+                                return -EINVAL;
+                        }
+
+                        // get length of e.g. (i(vy)i) --> 8
+                        r = signature_element_length(type, &signature_len);
+                        if (r < 0) {
+                                log_err("Invalid struct entry signature.");
+                                return r;
+                        }
+                        {
+                                // Json dict iterator
+                                JsonObjectEntry* joe;
+                                _cleanup_(json_object_iterator_freep) JsonObjectIterator* joiter = json_object_iterator_new(json);
+
+                                // get the signature inside the brackets e.g. {i(vy)} --> i(vy)
+                                char sub_signature[signature_len-1];
+                                memcpy(sub_signature, type + 1, signature_len - 2);
+                                sub_signature[signature_len - 2] = 0;
+
+                                if(joiter == NULL){
+                                        log_err("Invalid json object");
+                                        return -EINVAL;
+                                }
+
+                                log_debug("Parsing object %s", sub_signature);
+
+                                joe = json_object_iterator_next(joiter);
+                                while(joe){
+                                        unsigned int sub_type_inc = 0;
+                                        char* key = json_object_entry_key(joe);
+                                        JsonValue* value = json_object_entry_value(joe);
+
+                                        r = sd_bus_message_open_container(message, SD_BUS_TYPE_DICT_ENTRY, sub_signature);
+                                        if (r < 0){
+                                                log_err("Creating dict container failed.");
+                                                return -EINVAL;
+                                        }
+
+                                        log_debug("Adding key: %s", key);
+                                        r = sd_bus_message_append_basic(message, SD_BUS_TYPE_STRING, key);  // TODO: convert to any basic type, not just string
+                                        if ( r < 0) {
+                                                log_err("DBUS appending key of dict failed");
+                                                return r;
+                                        }
+
+                                        r = bus_message_append_from_json(message, value, sub_signature + 1, &sub_type_inc);
+                                        if ( r < 0) {
+                                                log_err("DBUS appending value of dict failed");
+                                                return r;
+                                        }
+                                        r = sd_bus_message_close_container(message);
+                                        if ( r < 0) {
+                                                log_err("CLosing dict entry container failed");
+                                                return r;
+                                        }
+
+                                        joe = json_object_iterator_next(joiter);
+                                }
+                        }
+                        *type_inc = signature_len;
+                        return 0;
+                }
+
+                case SD_BUS_TYPE_VARIANT: {
+                        int r;
+                        JsonType j_type;
+                        JsonValue *json_copy = json;
+                        char dbus_variant_sign[2] = { _SD_BUS_TYPE_INVALID, '\0' };
+                        const char *p_dbus_variant_sign = dbus_variant_sign;
+                        unsigned int sub_type_inc = 0;
+
+                        j_type = json_value_get_type(json);
+                        switch(j_type) {
+                                case JSON_TYPE_OBJECT: {
+                                        JsonValue *valuep;
+
+                                        if(json_object_lookup(json, "dbus_variant_sign", &valuep, JSON_TYPE_STRING)) {
+                                                p_dbus_variant_sign = json_value_get_string(valuep);
+                                                if(json_object_lookup(json, "data", &valuep, 0)) {
+                                                        json_copy = valuep;
+                                                }
+                                        }
+                                        break;
+                                }
+                                case JSON_TYPE_ARRAY:
+                                        log_err("Variant is expected: Array needs to be passed as an object containing the dbus signature and the data.");
+                                        return -EINVAL;
+                                case JSON_TYPE_STRING:
+                                        dbus_variant_sign[0] = SD_BUS_TYPE_STRING;
+                                        break;
+                                case JSON_TYPE_NUMBER:
+                                        log_err("Variant is expected: Numbers need to be passed as an object containing the dbus signature and the data.");
+                                        return -EINVAL;
+                                case JSON_TYPE_TRUE:
+                                case JSON_TYPE_FALSE:
+                                        dbus_variant_sign[0] = SD_BUS_TYPE_BOOLEAN;
+                                        break;
+                                // case JSON_TYPE_NULL:
+                                //        d_type = SD_BUS_TYPE_BYTE;
+                                default:
+                                        dbus_variant_sign[0] = _SD_BUS_TYPE_INVALID;
+                        };
+
+                        r = sd_bus_message_open_container(message, SD_BUS_TYPE_VARIANT, p_dbus_variant_sign);
+                        if (r < 0){
+                                log_err("Opening variant container failed");
+                                return -EINVAL;
+                        }
+
+                        r = bus_message_append_from_json(message, json_copy, p_dbus_variant_sign, &sub_type_inc);
+                        if ( r < 0) {
+                                log_err("Appending variant failed");
+                                return r;
+                        }
+                        *type_inc = 1;
+                        r = sd_bus_message_close_container(message);
+                        if (r < 0){
+                                log_err("Closing variant container failed.");
+                        }
+                        return r;
+                }
+
                 case SD_BUS_TYPE_UNIX_FD:
                         return -ENOTSUP;
 
@@ -392,6 +669,7 @@ static int bus_message_append_from_json(sd_bus_message *message, JsonValue *json
                         else
                                 return -EINVAL;
 
+                        *type_inc = 1;
                         return sd_bus_message_append_basic(message, 'b', &b);
                 }
 
@@ -401,8 +679,11 @@ static int bus_message_append_from_json(sd_bus_message *message, JsonValue *json
                         if (json_value_get_type(json) != JSON_TYPE_STRING)
                                 return -EINVAL;
 
+                        *type_inc = 1;
                         return sd_bus_message_append_basic(message, *type, json_value_get_string(json));
                 }
+                default:
+                        return -EINVAL;
         }
 
         return -EINVAL;
@@ -411,6 +692,7 @@ static int bus_message_append_from_json(sd_bus_message *message, JsonValue *json
 static int bus_message_append_args_from_json(sd_bus_message *message, DBusMethod *method, JsonValue *args) {
         size_t n_args;
         int r;
+        unsigned int sub_type_inc = 0;
 
         n_args = json_array_get_length(args);
 
@@ -422,7 +704,7 @@ static int bus_message_append_args_from_json(sd_bus_message *message, DBusMethod
 
                 json_array_get(args, i, &arg, 0);
 
-                r = bus_message_append_from_json(message, arg, method->in_args[i]->type);
+                r = bus_message_append_from_json(message, arg, method->in_args[i]->type, &sub_type_inc);
                 if (r < 0)
                         return r;
         }
@@ -520,7 +802,7 @@ static int introspect_finished(sd_bus_message *message, void *userdata, sd_bus_e
 
         request->method = dbus_node_find_method(request->node, interface, method_name);
         if (!request->method) {
-                log_err("Invalid bdus method: %s", method_name);
+                log_err("Invalid dbus method: %s", method_name);
                 http_response_end_error(response, 400, "No such method", NULL);
                 return 0;
         }
