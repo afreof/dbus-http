@@ -341,6 +341,12 @@ static int bus_message_append_number(sd_bus_message *message, char type, double 
                         break;
                 }
 
+                case SD_BUS_TYPE_INT64: {
+                        int64_t num = number;
+                        sd_bus_message_append_basic(message, type, &num);
+                        break;
+                }
+
                 default:
                         return -EINVAL;
         }
