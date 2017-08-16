@@ -54,7 +54,7 @@ static CmdArgs* cmd_args_new (int argc, char **argv) {
 
         cmd_args = malloc(sizeof(CmdArgs));
         cmd_args->session_bus = false;
-        cmd_args->http_port = 8080;
+        cmd_args->http_port = 80;
         cmd_args->www_dir = NULL;
 
         while ((short_arg = getopt (argc, argv, "sp:v:w:h")) != -1) {
