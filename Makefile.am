@@ -21,6 +21,7 @@ export GCC_COLORS
 CLEANFILES = $(BUILT_SOURCES)
 bin_PROGRAMS =
 noinst_LIBRARIES =
+EXTRA_DIST =
 
 INSTALL_EXEC_HOOKS =
 UNINSTALL_EXEC_HOOKS =
@@ -36,6 +37,16 @@ AM_CPPFLAGS = \
 
 AM_CFLAGS = $(OUR_CFLAGS)
 AM_LDFLAGS = $(OUR_LDFLAGS)
+
+
+data_edit = sed \
+	-e 's|@bindir[@]|$(bindir)|g' \
+	-e 's|@sbindir[@]|$(sbindir)|g' \
+	-e 's|@sysconfdir[@]|$(sysconfdir)|g' \
+	-e 's|@localstatedir[@]|$(localstatedir)|g' \
+	-e 's|@libexecdir[@]|$(libexecdir)|g'
+
+
 
 # ------------------------------------------------------------------------------
 bin_PROGRAMS += \
@@ -62,6 +73,20 @@ dbus_http_LDADD = \
 	$(EXPAT_LIBS) \
 	$(MICROHTTPD_LIBS) \
 	$(SYSTEMD_LIBS)
+
+if HAVE_SYSTEMD
+systemdsystemunit_DATA = data/dbus-http.service
+
+EXTRA_DIST += \
+	data/dbus-http.service.in
+
+CLEANFILES += \
+	data/dbus-http.service
+
+data/dbus-http.service: $(srcdir)/data/dbus-http.service.in
+	$(AM_V_GEN) mkdir -p data
+	$(AM_V_GEN) $(data_edit) $< >$@
+endif
 
 install-tree: all
 	rm -rf $(abs_builddir)/install-tree
