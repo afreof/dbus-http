@@ -6,6 +6,10 @@
 #include <microhttpd.h>
 #include <stdlib.h>
 #include <string.h>
+#include <stdbool.h>
+
+#include <sys/stat.h>
+
 
 #define _cleanup_(fn) __attribute__((__cleanup__(fn)))
 
@@ -112,6 +116,11 @@ static void http_server_log(void * arg, const char * fmt, va_list ap) {
         log_debug(fmt, ap);
 }
 
+static bool ipv6_test(void) {
+          struct stat buffer;
+          return (stat ("/proc/net/if_inet6", &buffer) == 0);
+}
+
 int http_server_new(HttpServer **serverp, uint16_t port, sd_event *loop,
                     HttpGetHandler get_handler, HttpPostHandler post_handler, void *userdata) {
         _cleanup_(http_server_freep) HttpServer *server = NULL;
@@ -124,11 +133,13 @@ int http_server_new(HttpServer **serverp, uint16_t port, sd_event *loop,
         server->post_handler = post_handler;
         server->userdata = userdata;
 
-        flags = MHD_USE_DUAL_STACK |
-                MHD_USE_SUSPEND_RESUME |
+        flags = MHD_USE_SUSPEND_RESUME |
                 MHD_USE_PEDANTIC_CHECKS |
                 MHD_USE_EPOLL_INTERNAL_THREAD |
                 MHD_USE_PIPE_FOR_SHUTDOWN;
+        if(ipv6_test()) {
+                flags |= MHD_USE_DUAL_STACK;
+        }
         if(log_get_level() >= LOG_DEBUG ) {
                 flags |= MHD_USE_DEBUG;
         }
