@@ -1,4 +1,5 @@
 
+#include <inttypes.h>
 #include <stdlib.h>
 #include <stdio.h>
 #include <string.h>
@@ -109,11 +110,86 @@ static int bus_message_dict_entry_to_json(sd_bus_message *message, char **keyp, 
         switch (contents[0]) {
                 case SD_BUS_TYPE_STRING:
                 case SD_BUS_TYPE_OBJECT_PATH:
-                case SD_BUS_TYPE_SIGNATURE:
+                case SD_BUS_TYPE_SIGNATURE: {
                         r = sd_bus_message_read_basic(message, contents[0], &key);
                         if (r < 0)
                                 return r;
+
+                        *keyp = strdup(key);
                         break;
+                }
+
+                case SD_BUS_TYPE_BYTE: {
+                        uint8_t num;
+                        r = sd_bus_message_read_basic(message, contents[0], &num);
+                        if (r < 0)
+                                return r;
+                        asprintf(keyp, "%" PRIu8, num);
+                        break;
+                }
+
+                case SD_BUS_TYPE_INT16: {
+                        int16_t num;
+                        r = sd_bus_message_read_basic(message, contents[0], &num);
+                        if (r < 0)
+                                return r;
+                        asprintf(keyp, "%" PRId16, num);
+                        break;
+                }
+
+                case SD_BUS_TYPE_UINT16: {
+                        uint16_t num;
+                        r = sd_bus_message_read_basic(message, contents[0], &num);
+                        if (r < 0)
+                                return r;
+                        asprintf(keyp, "%" PRIu16, num);
+                        break;
+                }
+
+                case SD_BUS_TYPE_INT32: {
+                        int32_t num;
+                        r = sd_bus_message_read_basic(message, contents[0], &num);
+                        if (r < 0)
+                                return r;
+                        asprintf(keyp, "%" PRId32, num);
+                        break;
+                }
+
+                case SD_BUS_TYPE_UINT32: {
+                        uint32_t num;
+                        r = sd_bus_message_read_basic(message, contents[0], &num);
+                        if (r < 0)
+                                return r;
+                        asprintf(keyp, "%" PRIu32, num);
+                        break;
+                }
+
+                case SD_BUS_TYPE_INT64: {
+                        int64_t num;
+                        r = sd_bus_message_read_basic(message, contents[0], &num);
+                        if (r < 0)
+                                return r;
+                        asprintf(keyp, "%" PRId64, num);
+                        break;
+                }
+
+                case SD_BUS_TYPE_UINT64: {
+                        uint64_t num;
+                        r = sd_bus_message_read_basic(message, contents[0], &num);
+                        if (r < 0)
+                                return r;
+                        asprintf(keyp, "%" PRIu64, num);
+                        break;
+                }
+
+                case SD_BUS_TYPE_DOUBLE: {
+                        double num;
+                        r = sd_bus_message_read_basic(message, contents[0], &num);
+                        if (r < 0)
+                                return r;
+                        asprintf(keyp, "%f", num);
+                        break;
+                }
 
                 default:
                         return -ENOTSUP;
@@ -127,7 +203,6 @@ static int bus_message_dict_entry_to_json(sd_bus_message *message, char **keyp, 
         if (r < 0)
                 return r;
 
-        *keyp = strdup(key);
         key = NULL;
 
         *valuep = value;
