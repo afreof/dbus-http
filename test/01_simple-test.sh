@@ -3,7 +3,7 @@
 START_DBUS_HTTP=1
 START_DBUS_HTTP_TEST=1
 PORT=8080
-DBUS_PATH=""
+DBUS_PATH="dbus/"
 
 dbus_http_testd_pid=0
 dbus_http_pid=0

@@ -30,6 +30,11 @@ typedef struct {
         DBusMethod *method;
 } MethodCallRequest;
 
+typedef struct {
+        sd_bus *bus;
+        const char *dbus_prefix;
+} Environment;
+
 static int bus_message_element_to_json(sd_bus_message *message, JsonValue **jsonp);
 
 static inline void freep(void *p) {
@@ -934,61 +939,75 @@ static int parse_url(const char *url, char **namep, char **objectp) {
 }
 
 static void handle_get(const char *path, HttpResponse *response, void *userdata) {
-        sd_bus *bus = userdata;
-        _cleanup_(freep) char *name = NULL;
-        _cleanup_(freep) char *object = NULL;
-        int r;
-        const char prop_interface[] = "org.freedesktop.DBus.Properties";
-        const char prop_func[] = "GetAll";
+        Environment *env = userdata;
 
-        r = parse_url(path, &name, &object);
-        if (r < 0) {
-                http_response_end(response, 400);
-                return;
-        }
+        if (strncmp(env->dbus_prefix, path, strlen(env->dbus_prefix)) == 0) {  // starts with dbus_prefix
+                const char *dbus_path = &path[strlen(env->dbus_prefix) - 1]; // dbus_path must start with a slash!
+                sd_bus *bus = env->bus;
+                _cleanup_(freep) char *name = NULL;
+                _cleanup_(freep) char *object = NULL;
+                int r;
+                const char prop_interface[] = "org.freedesktop.DBus.Properties";
+                const char prop_func[] = "GetAll";
 
-        r = sd_bus_call_method_async(bus, NULL, name, object, prop_interface, prop_func,
-                                     get_properties_finished, response, "s", "");
-        if (r == -EINVAL) {
-                log_err("Returned EINVAL: call %s %s %s %s", name, object, prop_interface, prop_func);
+                r = parse_url(dbus_path, &name, &object);
+                if (r < 0) {
+                        http_response_end(response, 400);
+                        return;
+                }
+
+                r = sd_bus_call_method_async(bus, NULL, name, object, prop_interface, prop_func,
+                                                                         get_properties_finished, response, "s", "");
+                if (r == -EINVAL) {
+                        log_err("Returned EINVAL: call %s %s %s %s", name, object, prop_interface, prop_func);
+                        http_response_end(response, 400);
+                }
+                else if (r < 0) {
+                        log_err("Error in call %s %s %s %s", name, object, prop_interface, prop_func);
+                        http_response_end(response, 500);
+                }
+        } else {
                 http_response_end(response, 400);
-        } else if (r < 0) {
-                log_err("Error in call %s %s %s %s", name, object, prop_interface, prop_func);
-                http_response_end(response, 500);
         }
 }
 
 static void handle_post(const char *path, void *body, size_t len, HttpResponse *response, void *userdata) {
-        sd_bus *bus = userdata;
-        MethodCallRequest *request;
-        int r;
+        Environment *env = userdata;
 
-        if (!body) {
-                http_response_end(response, 400);
-                return;
-        }
+        if (strncmp(env->dbus_prefix, path, strlen(env->dbus_prefix)) == 0) {  // starts with dbus_prefix
+                const char *dbus_path = &path[strlen(env->dbus_prefix) - 1]; // dbus_path must start with a slash!
+                sd_bus *bus = env->bus;
+                MethodCallRequest *request;
+                int r;
 
-        request = calloc(1, sizeof(MethodCallRequest));
-        http_response_set_user_data(response, request, (void (*)(void *))method_call_request_free);
+                if (!body) {
+                        http_response_end(response, 400);
+                        return;
+                }
 
-        r = parse_url(path, &request->destination, &request->object);
-        if (r < 0) {
-                http_response_end(response, 400);
-                return;
-        }
+                request = calloc(1, sizeof(MethodCallRequest));
+                http_response_set_user_data(response, request, (void (*)(void *))method_call_request_free);
 
-        r = json_parse(body, &request->json, JSON_TYPE_OBJECT);
-        if (r < 0) {
-                http_response_end(response, 400);
-                return;
-        }
+                r = parse_url(dbus_path, &request->destination, &request->object);
+                if (r < 0) {
+                        http_response_end(response, 400);
+                        return;
+                }
 
-        r = sd_bus_call_method_async(bus, NULL, request->destination, request->object,
-                                     "org.freedesktop.DBus.Introspectable", "Introspect",
-                                     introspect_finished, response, NULL);
-        if (r < 0) {
-                http_response_end(response, 400);
-                return;
+                r = json_parse(body, &request->json, JSON_TYPE_OBJECT);
+                if (r < 0) {
+                        http_response_end(response, 400);
+                        return;
+                }
+
+                r = sd_bus_call_method_async(bus, NULL, request->destination, request->object,
+                                "org.freedesktop.DBus.Introspectable", "Introspect", introspect_finished, response, NULL);
+                if (r < 0) {
+                        http_response_end(response, 400);
+                        return;
+                }
+        } else {
+                http_response_end(response, 404);
         }
 }
 
@@ -1049,6 +1068,7 @@ int main(int argc, char **argv) {
         _cleanup_(sd_bus_unrefp) sd_bus *bus = NULL;
         _cleanup_(http_server_freep) HttpServer *server = NULL;
         int r;
+        Environment *env = NULL;
         CmdArgs cmd_args;
         const char *session_bus = "session";
         const char *system_bus = "system";
@@ -1079,7 +1099,16 @@ int main(int argc, char **argv) {
         if (r < 0)
                 goto finish;
 
-        r = http_server_new(&server, cmd_args.http_port, loop, handle_get, handle_post, bus);
+        // Initialize the Server Environment
+        env = malloc(sizeof *env);
+        if (env == NULL) {
+                puts("failed to allocate memory.");
+                goto finish;
+        }
+        env->bus = bus;
+        env->dbus_prefix = "/dbus/";
+
+        r = http_server_new(&server, cmd_args.http_port, loop, handle_get, handle_post, env);
         if (r < 0)
                 goto finish;
 
@@ -1090,6 +1119,9 @@ int main(int argc, char **argv) {
 finish:
         if (r < 0)
                 log_emerg("Failure: %s\n", strerror(-r));
+
+        if(env)
+                free(env);
 
         return r < 0 ? EXIT_FAILURE : EXIT_SUCCESS;
 }
