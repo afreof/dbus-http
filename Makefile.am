@@ -20,6 +20,7 @@ export GCC_COLORS
 
 CLEANFILES = $(BUILT_SOURCES)
 bin_PROGRAMS =
+check_PROGRAMS =
 noinst_LIBRARIES =
 EXTRA_DIST =
 
@@ -93,3 +94,19 @@ install-tree: all
 	$(MAKE) install DESTDIR=$(abs_builddir)/install-tree
 	tree $(abs_builddir)/install-tree
 .PHONY: install-tree
+
+
+
+# ------------------------------------------------------------------------------
+bin_PROGRAMS += \
+	dbus-http-testd
+
+dbus_http_testd_SOURCES = \
+	test/dbus-http-testd.c
+
+dbus_http_testd_CFLAGS = \
+	$(AM_CFLAGS) \
+	$(SYSTEMD_CFLAGS)
+
+dbus_http_testd_LDADD = \
+	$(SYSTEMD_LIBS)
