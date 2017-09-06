@@ -563,6 +563,24 @@ static void json_print_string(const char *string, FILE *f) {
                 else if (*p == '\\')
                         fputs("\\\\", f);
 
+                else if (*p == '/')
+                        fputs("\\/", f);
+
+                else if (*p == '\b')
+                        fputs("\\b", f);
+
+                else if (*p == '\f')
+                        fputs("\\f", f);
+
+                else if (*p == '\n')
+                        fputs("\\n", f);
+
+                else if (*p == '\r')
+                        fputs("\\r", f);
+
+                else if (*p == '\t')
+                        fputs("\\t", f);
+
                 else if (*p < ' ' || *p > 0x7f)
                         fprintf(f, "\\%.3o", *p);
 
