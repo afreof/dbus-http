@@ -158,4 +158,4 @@ echo "$result"
 [ "$result" == '{ "arg0": [ [ 1414, "bar2" ], [ 1515, "bar3" ] ], "arg1": 124, "arg2": [ 1, 2, 4 ] }' ] ||  { ((failed_tests++)); echo "failed"; }
 
 
-printf "\nEnd of test suite. $failed_tests tests failed.\n", 
+printf "\nEnd of test suite. $failed_tests tests failed.\n"
