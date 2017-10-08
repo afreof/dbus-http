@@ -167,7 +167,6 @@ static HttpServerHandlerStatus handle_get_file(void *cls, const char *url, HttpR
                 return HTTP_SERVER_HANDLED_ERROR;
         } else {
                 struct MHD_Response *mhd_response;
-                const union MHD_ConnectionInfo *info;
                 int ret;
 
                 if (response->f)
@@ -189,9 +188,6 @@ static HttpServerHandlerStatus handle_get_file(void *cls, const char *url, HttpR
                 if(ret != MHD_YES)
                         log_err("Enqueueing failed!");
                 log_debug("file served for URL: %s, path: %s", url, full_path);
-
-                info = MHD_get_connection_info(response->connection, MHD_CONNECTION_INFO_DAEMON);
-                MHD_run(info->daemon);
 
                 MHD_destroy_response (mhd_response);
                 if (response->free_func)
@@ -350,9 +346,19 @@ static int handle_request(void *cls, struct MHD_Connection *connection,
         return MHD_YES;
 }
 
+
+static void mhd_run_to_end(void *userdata) {
+        MHD_UNSIGNED_LONG_LONG to;
+        do {
+                log_debug("MHD_run");
+                MHD_run(userdata);
+        } while(MHD_get_timeout(userdata, &to) == MHD_YES && !to);
+}
+
+
 static int handle_http_event(sd_event_source *event, int fd, uint32_t revents, void *userdata) {
-        //log_debug("MHD_run, handle_http_event");
-        MHD_run(userdata);
+        log_debug("MHD_run, handle_http_event");
+        mhd_run_to_end(userdata);
         return 1;
 }
 
@@ -382,7 +388,8 @@ int http_server_new(HttpServer **serverp, uint16_t port, sd_event *loop,
 
         flags = MHD_ALLOW_SUSPEND_RESUME |
                 MHD_USE_PEDANTIC_CHECKS |
-                MHD_USE_EPOLL_INTERNAL_THREAD |
+                MHD_USE_EPOLL | MHD_USE_TURBO |
+                /* MHD_USE_TCP_FASTOPEN | */
                 MHD_USE_PIPE_FOR_SHUTDOWN;
         if(ipv6_test()) {
                 flags |= MHD_USE_DUAL_STACK;
@@ -455,9 +462,10 @@ void http_response_end(HttpResponse *response, int status) {
         }
         log_debug("Resuming connection");
         MHD_resume_connection(response->connection);
+
         info = MHD_get_connection_info(response->connection, MHD_CONNECTION_INFO_DAEMON);
-        log_debug("MHD_run, http_response_end");
-        MHD_run(info->daemon);
+        log_debug("mhd_run_to_end, http_response_end 1");
+        mhd_run_to_end(info->daemon);
 
         MHD_destroy_response(mhd_response);
 
