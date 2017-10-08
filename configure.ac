@@ -16,8 +16,8 @@ AC_CONFIG_HEADERS([build/config.h])
 AC_CONFIG_AUX_DIR([build/build-aux])
 
 # suppress conflicting defaults
-CFLAGS=${CFLAGS:-""}
-CXXFLAGS=${CXXFLAGS:-""}
+# CFLAGS=${CFLAGS:-""}
+# CXXFLAGS=${CXXFLAGS:-""}
 
 AC_USE_SYSTEM_EXTENSIONS
 AC_SYS_LARGEFILE
