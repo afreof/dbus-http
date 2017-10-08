@@ -11,6 +11,8 @@ my_iface_name = "dbus.http.dbussyTest"
 
 loop = asyncio.get_event_loop()
 
+# AbstractEventLoop.set_debug()
+# logging.getLogger('asyncio').setLevel(logging.WARNING)
 
 @ravel.interface(ravel.INTERFACE.SERVER, name=my_iface_name)
 class DbusHttpTest:
