@@ -449,11 +449,13 @@ void http_response_end(HttpResponse *response, int status) {
 
         log_debug("Enqueueing response and resuming connection 0x%p", (void*)(&(response->connection)));
         ret = MHD_queue_response(response->connection, status, mhd_response);
-        if(ret != MHD_YES)
+        if(ret != MHD_YES){
                 log_err("Enqueueing failed!");
+        }
+        log_debug("Resuming connection");
         MHD_resume_connection(response->connection);
         info = MHD_get_connection_info(response->connection, MHD_CONNECTION_INFO_DAEMON);
-        //log_debug("MHD_run, http_response_end");
+        log_debug("MHD_run, http_response_end");
         MHD_run(info->daemon);
 
         MHD_destroy_response(mhd_response);

@@ -398,23 +398,29 @@ static int bus_message_to_json(sd_bus_message *message, JsonValue **jsonp, DBusM
         for (size_t i = 0; i < method->n_out_args; i++) {
                 _cleanup_(json_value_freep) JsonValue *element = NULL;
 
-                if (sd_bus_message_at_end(message, false))
+                if (sd_bus_message_at_end(message, false)){
+                        log_err("sd_bus_message_at_end failed.");
                         return -EINVAL;
+                }
 
                 r = bus_message_element_to_json(message, &element);
-                if (r < 0)
+                if (r < 0){
+                        log_err("bus_message_element_to_json failed.");
                         return r;
+                }
 
                 r = json_object_insert(json, method->out_args[i]->name, element);
-                if (r < 0)
+                if (r < 0){
+                        log_err("json_object_insert failed.");
                         return r;
-
+                }
                 element = NULL;
-
         }
 
-        if (!sd_bus_message_at_end(message, false))
+        if (!sd_bus_message_at_end(message, false)){
+                log_err("!sd_bus_message_at_end failed.");
                 return -EINVAL;
+        }
 
         *jsonp = json;
         json = NULL;
@@ -817,6 +823,7 @@ static int method_call_finished(sd_bus_message *message, void *userdata, sd_bus_
         log_info("get properties from dbus");
         error = sd_bus_message_get_error(message);
         if (error) {
+                log_err("sd_bus_message_get_error failed");
                 http_response_end_dbus_error(response, error);
                 return 0;
         }
