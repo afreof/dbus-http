@@ -356,7 +356,8 @@ static int handle_http_event(sd_event_source *event, int fd, uint32_t revents, v
 }
 
 static void http_server_log(void * arg, const char * fmt, va_list ap) {
-        log_debug(fmt, ap);
+        printf("microhttpd: ");
+        vprintf(fmt, ap);
 }
 
 static bool ipv6_test(void) {
@@ -385,6 +386,7 @@ int http_server_new(HttpServer **serverp, uint16_t port, sd_event *loop,
         if(ipv6_test()) {
                 flags |= MHD_USE_DUAL_STACK;
         }
+        flags |= MHD_USE_ERROR_LOG;
         if(log_get_level() >= LOG_DEBUG ) {
                 flags |= MHD_USE_DEBUG;
         }
