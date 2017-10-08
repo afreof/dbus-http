@@ -379,7 +379,7 @@ int http_server_new(HttpServer **serverp, uint16_t port, sd_event *loop,
         server->userdata = userdata;
         server->www_dir = www_dir;
 
-        flags = MHD_USE_SUSPEND_RESUME |
+        flags = MHD_ALLOW_SUSPEND_RESUME |
                 MHD_USE_PEDANTIC_CHECKS |
                 MHD_USE_EPOLL_INTERNAL_THREAD |
                 MHD_USE_PIPE_FOR_SHUTDOWN;
@@ -399,7 +399,7 @@ int http_server_new(HttpServer **serverp, uint16_t port, sd_event *loop,
         if (server->daemon == NULL)
                 return -EOPNOTSUPP;
 
-        info = MHD_get_daemon_info(server->daemon, MHD_DAEMON_INFO_EPOLL_FD_LINUX_ONLY);
+        info = MHD_get_daemon_info(server->daemon, MHD_DAEMON_INFO_EPOLL_FD);
         if (info == NULL)
                 return -EOPNOTSUPP;
 
