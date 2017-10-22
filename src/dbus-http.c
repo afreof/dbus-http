@@ -956,6 +956,8 @@ HttpServerHandlerStatus handle_get_dbus(const char *path, HttpResponse *response
                         return HTTP_SERVER_HANDLED_ERROR;
                 }
 
+                http_suspend_connection(response);
+
                 r = sd_bus_call_method_async(bus, NULL, name, object, prop_interface, prop_func,
                                 get_properties_finished, response, "s", "");
                 if (r == -EINVAL) {
@@ -1006,6 +1008,8 @@ HttpServerHandlerStatus handle_post_dbus(const char *path, void *body, size_t le
                         http_response_end(response, 400);
                         return HTTP_SERVER_HANDLED_ERROR;
                 }
+
+                http_suspend_connection(response);
 
                 r = sd_bus_call_method_async(bus, NULL, request->destination, request->object,
                                 "org.freedesktop.DBus.Introspectable", "Introspect", introspect_finished, response, NULL);

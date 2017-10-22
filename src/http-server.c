@@ -93,6 +93,12 @@ static void free_full_path(char** full_path) {
                 free(*full_path);
 }
 
+
+void http_suspend_connection(HttpResponse *response){
+        log_debug("Suspending connection 0x%p", (void*)response->connection);
+        MHD_suspend_connection(response->connection);
+}
+
 static HttpServerHandlerStatus handle_get_file(void *cls, const char *url, HttpResponse *response) {
         HttpServer *server = cls;
         _cleanup_(free_full_path) char *full_path = NULL;
@@ -101,7 +107,6 @@ static HttpServerHandlerStatus handle_get_file(void *cls, const char *url, HttpR
         const char *content_type = NULL;
 
         log_info("handle_get_file for URL: %s", url);
-        log_debug("Resuming connection");
 
         // prepend www folder
         full_path = malloc(strlen(server->www_dir) + strlen(url) + 12); // leave enough space to append "/index.html" if necessary.
@@ -185,7 +190,6 @@ static HttpServerHandlerStatus handle_get_file(void *cls, const char *url, HttpR
                         log_err("Enqueueing failed!");
                 log_debug("file served for URL: %s, path: %s", url, full_path);
 
-                MHD_resume_connection(response->connection);
                 info = MHD_get_connection_info(response->connection, MHD_CONNECTION_INFO_DAEMON);
                 MHD_run(info->daemon);
 
@@ -310,9 +314,6 @@ static int handle_request(void *cls, struct MHD_Connection *connection,
                 fclose(request->f);
                 request->f = NULL;
         }
-
-        log_debug("Suspending connection 0x%p", (void*)connection);
-        MHD_suspend_connection(connection);
 
         response = calloc(1, sizeof(HttpResponse));
         response->connection = connection;

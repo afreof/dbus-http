@@ -24,3 +24,5 @@ void http_response_end(HttpResponse *response, int status);
 FILE * http_response_get_stream(HttpResponse *response, const char *content_type);
 void http_response_set_user_data(HttpResponse *response, void *data, void (*free_func)(void *));
 void * http_response_get_user_data(HttpResponse *response);
+
+void http_suspend_connection(HttpResponse *response);
