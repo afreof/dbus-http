@@ -4,6 +4,8 @@ START_DBUS_HTTP=1
 START_DBUS_HTTP_TEST=1
 PORT=8080
 DBUS_PATH="dbus/"
+# DBUS_HTTP_ARGS="-v DEBUG"
+# VALGRIND=valgrind
 
 dbus_http_testd_pid=0
 dbus_http_pid=0
@@ -62,8 +64,7 @@ echo ""
 
 
 if [ $START_DBUS_HTTP -eq 1 ]; then
-	# DBUS_HTTP_ARGS="-v DEBUG"
-	./dbus-http -s -p ${PORT} ${DBUS_HTTP_ARGS} &
+	${VALGRIND} ./dbus-http -s -p ${PORT} ${DBUS_HTTP_ARGS} &
 	dbus_http_pid=$!
 	echo "Started dbus-http (${dbus_http_pid})"
 	sleep 1
