@@ -239,6 +239,7 @@ static void start_element(void *data, const char *element, const char **attribut
                                         state->level = STATE_ARGUMENT;
                                 }
                         }
+                        break;
                 }
 
                 case STATE_INTERFACE: {
