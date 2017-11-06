@@ -4,6 +4,8 @@ START_DBUS_HTTP=1
 START_DBUSSY_TEST=1
 PORT=8080
 DBUS_PATH="dbus/"
+# DBUS_HTTP_ARGS="-v DEBUG"
+# VALGRIND=valgrind
 
 dbussy_test_pid=0
 dbus_http_pid=0
@@ -16,8 +18,8 @@ trap exit_handler EXIT
 
 
 if [ $START_DBUSSY_TEST -eq 1 ]; then
-	export PYTHONPATH=./test/dbussy
-	./test/dbussy_test_server &
+	export PYTHONPATH=../test/dbussy
+	../test/dbussy_test_server &
 	dbussy_test_pid=$!
 	echo "Started dbussy test server (${dbussy_test_pid})"
 	sleep 1
@@ -58,8 +60,7 @@ echo ""
 
 
 if [ $START_DBUS_HTTP -eq 1 ]; then
-	# DBUS_HTTP_ARGS="-v DEBUG"
-	./dbus-http -s -p ${PORT} ${DBUS_HTTP_ARGS} &
+	${VALGRIND} ./dbus-http -s -p ${PORT} ${DBUS_HTTP_ARGS} &
 	dbus_http_pid=$!
 	echo "Started dbus-http (${dbus_http_pid})"
 	sleep 1
