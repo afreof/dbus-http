@@ -28,7 +28,7 @@ fi
 
 echo "Sanity checks for dbussy test server"
 busctl --user call dbus.http.dbussyTest /TestIf1 dbus.http.dbussyTest get_string \
-| grep 's "initial value"' || { echo "test failed: get_string"; exit 1; }
+| grep 's "initial value with \\303\\244\\303\\266\\303\\274"' || { echo "test failed: get_string"; exit 1; }
 
 busctl --user call dbus.http.dbussyTest /TestIf1 dbus.http.dbussyTest set_string s test1
 
@@ -75,12 +75,12 @@ echo "$result"
 [ "$result" == "{ \"arg0\": \"test1\" }" ] || { ((failed_tests++)); echo "failed"; }
 
 printf "\n\n--set_string\n"
-curl -s http://localhost:${PORT}/${DBUS_PATH}dbus.http.dbussyTest/TestIf1 --data '{"interface":"dbus.http.dbussyTest", "method":"set_string", "arguments":["a new string"]}'
+curl -s http://localhost:${PORT}/${DBUS_PATH}dbus.http.dbussyTest/TestIf1 --data '{"interface":"dbus.http.dbussyTest", "method":"set_string", "arguments":["a new string with äöü"]}'
 
 printf "\n\n--get_string\n"
 result=$(curl -s http://localhost:${PORT}/${DBUS_PATH}dbus.http.dbussyTest/TestIf1 --data '{"interface":"dbus.http.dbussyTest", "method":"get_string", "arguments":[]}')
 echo "$result"
-[ "$result" == "{ \"arg0\": \"a new string\" }" ] || { ((failed_tests++)); echo "failed"; }
+[ "$result" == "{ \"arg0\": \"a new string with äöü\" }" ] || { ((failed_tests++)); echo "failed"; }
 
 
 printf "\n\n--get_array_struct_ss\n"

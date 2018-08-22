@@ -581,9 +581,6 @@ static void json_print_string(const char *string, FILE *f) {
                 else if (*p == '\t')
                         fputs("\\t", f);
 
-                else if (*p < ' ' || *p > 0x7f)
-                        fprintf(f, "\\%.3o", *p);
-
                 else
                         fprintf(f, "%c", *p);
         }

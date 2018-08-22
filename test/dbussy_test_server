@@ -18,17 +18,19 @@ loop = asyncio.get_event_loop()
 class DbusHttpTest:
 
     def __init__(self):
-        self._a_string = "initial value"
+        self._a_string = "initial value with äöü"
         self._array_struct_ss = [("foo1", "bar1"), ("foo2", "bar2")]
         self._array_struct_svs = [("foo1", ('u', 7), "bar1"), ("foo2", ('s', "another string"), "bar2")]
 
     @ravel.method(name="get_string", in_signature="", out_signature="s")
     def handle_get_string(self):
+        print("TS get_string: %s" % self._a_string)
         return [self._a_string]
 
     @ravel.method(name="set_string", in_signature="s", out_signature="", args_keyword="a_string")
     def handle_set_string(self, a_string):
         self._a_string = a_string[0]
+        print("TS set_string: %s" % self._a_string)
         return []
 
     @ravel.method(name="get_array_struct_ss", in_signature="", out_signature="a(ss)")
